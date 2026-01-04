@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useCallback, useRef } from "react"
+import { useState, useCallback, useRef, useEffect } from "react"
 import { SkeeBallMachine } from "./skee-ball-machine"
 import { Leaderboard } from "./leaderboard"
 import { GameHeader } from "./game-header"
@@ -20,19 +20,20 @@ export interface Reward {
   claimed: boolean
 }
 
-export default function SkeeBallGame() {
-  const [gameStarted, setGameStarted] = useState(false)
+export default function SkeeBallGame({ autoStart = false }: { autoStart?: boolean }) {
+  const [gameStarted, setGameStarted] = useState(Boolean(autoStart))
   const [score, setScore] = useState(0)
   const [ballsLeft, setBallsLeft] = useState(5)
   const [gameOver, setGameOver] = useState(false)
+  const [playerName, setPlayerName] = useState("")
   const [rewards, setRewards] = useState<Reward[]>([
-    { id: "1", name: "Cute Bunny Plushie", points: 50, icon: "bunny", claimed: false },
-    { id: "2", name: "Ferris Wheel Ride", points: 100, icon: "ferris", claimed: false },
-    { id: "3", name: "Sweet Cake Dessert", points: 150, icon: "cake", claimed: false },
-    { id: "4", name: "Gold Star Trophy", points: 200, icon: "star", claimed: false },
+    { id: "1", name: "Cute Bunny Plushie", points: 30, icon: "bunny", claimed: false },
+    { id: "2", name: "Ferris Wheel Ride", points: 60, icon: "ferris", claimed: false },
+    { id: "3", name: "Sweet Cake Dessert", points: 90, icon: "cake", claimed: false },
+    { id: "4", name: "Gold Star Trophy", points: 120, icon: "star", claimed: false },
   ])
   const [showRewardModal, setShowRewardModal] = useState(false)
-  const [unlockedReward, setUnlockedReward] = useState<Reward | null>(null)
+  const [unlockedRewards, setUnlockedRewards] = useState<Reward[]>([])
   const [showRewardsPanel, setShowRewardsPanel] = useState(false)
 
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([
@@ -45,45 +46,62 @@ export default function SkeeBallGame() {
   const scoreRef = useRef(score)
   scoreRef.current = score
 
+  // Simulate other players updating leaderboard
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const names = ["ALEX", "JAMIE", "TAYLOR", "MORGAN", "CASEY", "RILEY", "SKYLER"]
+      const randomName = names[Math.floor(Math.random() * names.length)]
+      const randomScore = Math.floor(Math.random() * 200) + 50
+
+      const newEntry: LeaderboardEntry = { rank: 0, name: randomName, score: randomScore }
+      setLeaderboard(prev => {
+        const updated = [...prev, newEntry]
+          .sort((a, b) => b.score - a.score)
+          .slice(0, 5)
+          .map((entry, index) => ({ ...entry, rank: index + 1 }))
+        return updated
+      })
+    }, 30000) // Update every 30 seconds
+
+    return () => clearInterval(interval)
+  }, [])
+
   const handleScore = useCallback((points: number) => {
     if (points > 0) {
-      setScore((prev) => {
-        const newScore = prev + points
-        checkForUnlockedRewards(newScore)
-        return newScore
-      })
+      setScore((prev) => prev + points)
     }
     setBallsLeft((prev) => {
       const newBalls = prev - 1
       if (newBalls === 0) {
         setTimeout(() => {
-          setGameOver(true)
-          updateLeaderboard(scoreRef.current + points)
-        }, 500)
+          const finalScore = scoreRef.current + points
+          updateLeaderboard(finalScore)
+          // Check for unlocked rewards
+          const unlocked = rewards.filter(reward => !reward.claimed && finalScore >= reward.points)
+          if (unlocked.length > 0) {
+            setUnlockedRewards(unlocked)
+            setShowRewardModal(true)
+          } else {
+            setGameOver(true)
+          }
+        }, 3500) // Wait for ball reset
       }
       return newBalls
     })
   }, [])
 
-  const checkForUnlockedRewards = (currentScore: number) => {
-    const newlyUnlocked = rewards.find((reward) => !reward.claimed && currentScore >= reward.points)
-    if (newlyUnlocked) {
-      setUnlockedReward(newlyUnlocked)
-      setShowRewardModal(true)
-    }
-  }
 
-  const claimReward = () => {
-    if (unlockedReward) {
-      setRewards((prev) => prev.map((r) => (r.id === unlockedReward.id ? { ...r, claimed: true } : r)))
-      setShowRewardModal(false)
-      setUnlockedReward(null)
-    }
+
+  const claimReward = (reward: Reward) => {
+    setRewards((prev) => prev.map((r) => (r.id === reward.id ? { ...r, claimed: true } : r)))
+    setShowRewardModal(false)
+    setUnlockedRewards([])
+    setGameOver(true)
   }
 
   const updateLeaderboard = (finalScore: number) => {
-    const playerName = "PLAYER"
-    const newEntry: LeaderboardEntry = { rank: 0, name: playerName, score: finalScore }
+    const name = playerName.trim() || "PLAYER"
+    const newEntry: LeaderboardEntry = { rank: 0, name, score: finalScore }
 
     const updatedBoard = [...leaderboard, newEntry]
       .sort((a, b) => b.score - a.score)
@@ -101,6 +119,9 @@ export default function SkeeBallGame() {
   }
 
   const startGame = () => {
+    const name = playerName.trim()
+    if (!name) return // Require name
+    setPlayerName(name)
     setGameStarted(true)
   }
 
@@ -110,16 +131,36 @@ export default function SkeeBallGame() {
 
       {!gameStarted && (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50">
-          <div className="text-center">
+          <div className="text-center max-w-md mx-4">
             <h1
-              className="text-5xl md:text-7xl text-[#ffd700] mb-8 drop-shadow-[0_0_30px_#ffd700] animate-pulse"
+              className="text-5xl md:text-7xl text-[#ffd700] mb-6 drop-shadow-[0_0_30px_#ffd700] animate-pulse"
               style={{ fontFamily: "var(--font-pixel)" }}
             >
               SKEE BALL
             </h1>
+
+            <p className="text-sm text-[#d4a574] mb-4" style={{ fontFamily: "var(--font-pixel)" }}>
+              Enter your name to appear on the leaderboard
+            </p>
+
+            <input
+              value={playerName}
+              onChange={(e) => setPlayerName(e.target.value.slice(0, 12))}
+              placeholder="Enter your name (required)"
+              autoFocus
+              onKeyDown={(e) => { if (e.key === "Enter" && playerName.trim()) startGame() }}
+              aria-label="Player name"
+              className="mb-4 w-full px-4 py-3 rounded-md text-black bg-[#fff9e0] placeholder-[#8a6a00] ring-2 ring-[#ffd700]/40 focus:outline-none focus:ring-4 focus:ring-[#ffd700] transition-shadow"
+            />
+
             <button
               onClick={startGame}
-              className="px-12 py-6 bg-gradient-to-b from-[#ff6b35] to-[#d4532a] border-4 border-[#ffd700] rounded-lg text-[#ffd700] text-2xl hover:brightness-110 hover:scale-105 transition-all shadow-[0_0_30px_#ff6b35]"
+              disabled={!playerName.trim()}
+              className={`w-full px-6 py-4 border-4 border-[#ffd700] rounded-lg text-[#ffd700] text-2xl transition-all shadow-[0_0_30px_#ff6b35] ${
+                playerName.trim()
+                  ? "bg-gradient-to-b from-[#ff6b35] to-[#d4532a] hover:brightness-110 hover:scale-105"
+                  : "bg-gray-500 cursor-not-allowed opacity-50"
+              }`}
               style={{ fontFamily: "var(--font-pixel)" }}
             >
               CLICK TO START
@@ -136,28 +177,28 @@ export default function SkeeBallGame() {
         <Leaderboard entries={leaderboard} />
       </div>
 
-      {showRewardModal && unlockedReward && (
+      {showRewardModal && unlockedRewards.length > 0 && (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
-          <div className="bg-gradient-to-b from-[#3d2817] to-[#2d1810] border-4 border-[#ffd700] rounded-lg p-8 text-center shadow-2xl max-w-md animate-bounce">
+          <div className="bg-gradient-to-b from-[#3d2817] to-[#2d1810] border-4 border-[#ffd700] rounded-lg p-8 text-center shadow-2xl max-w-md">
             <div className="text-6xl mb-4">🎉</div>
             <h2 className="text-2xl md:text-3xl text-[#ffd700] mb-4" style={{ fontFamily: "var(--font-pixel)" }}>
               CONGRATULATIONS!
             </h2>
             <p className="text-xl text-[#d4a574] mb-6" style={{ fontFamily: "var(--font-pixel)" }}>
-              Claim your prize!
+              Choose your reward!
             </p>
-            <div className="mb-6">
-              <p className="text-lg text-[#ffd700]" style={{ fontFamily: "var(--font-pixel)" }}>
-                {unlockedReward.name}
-              </p>
+            <div className="space-y-4 mb-6">
+              {unlockedRewards.map((reward) => (
+                <button
+                  key={reward.id}
+                  onClick={() => claimReward(reward)}
+                  className="w-full px-4 py-3 bg-gradient-to-b from-[#ff6b35] to-[#d4532a] border-2 border-[#ffd700] rounded-lg text-[#ffd700] text-lg hover:brightness-110 transition-all"
+                  style={{ fontFamily: "var(--font-pixel)" }}
+                >
+                  {reward.name}
+                </button>
+              ))}
             </div>
-            <button
-              onClick={claimReward}
-              className="px-8 py-3 bg-gradient-to-b from-[#ff6b35] to-[#d4532a] border-2 border-[#ffd700] rounded-lg text-[#ffd700] text-xl hover:brightness-110 transition-all"
-              style={{ fontFamily: "var(--font-pixel)" }}
-            >
-              CLAIM NOW
-            </button>
           </div>
         </div>
       )}

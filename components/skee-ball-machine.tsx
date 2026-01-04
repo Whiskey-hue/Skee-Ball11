@@ -21,6 +21,7 @@ interface BallState {
   phase: "rolling" | "airborne" | "bouncing" | "falling"
   z: number
   vz: number
+  launchedAt?: number
 }
 
 interface Hole {
@@ -60,12 +61,15 @@ export function SkeeBallMachine({ ballsLeft, onScore, gameOver }: SkeeBallMachin
     phase: "rolling",
     z: 0,
     vz: 0,
+    launchedAt: 0,
   })
   const [lastScore, setLastScore] = useState<number | null>(null)
   const [litHole, setLitHole] = useState<string | null>(null)
   const startPosRef = useRef({ x: 0, y: 0 })
   const machineRef = useRef<HTMLDivElement>(null)
   const animationRef = useRef<number | null>(null)
+  // guard to ensure each launch only triggers one scoring event
+  const launchedHandledRef = useRef(false)
 
   const handleStart = (clientX: number, clientY: number) => {
     if (gameOver || ballsLeft === 0 || ball.active) return
@@ -101,6 +105,9 @@ export function SkeeBallMachine({ ballsLeft, onScore, gameOver }: SkeeBallMachin
     const speed = throwPower * 0.28
     const angleRad = (throwAngle * Math.PI) / 180
 
+    // reset per-launch guard
+    launchedHandledRef.current = false
+
     setBall({
       x: 50,
       y: 88,
@@ -114,6 +121,7 @@ export function SkeeBallMachine({ ballsLeft, onScore, gameOver }: SkeeBallMachin
       phase: "rolling",
       z: 0,
       vz: 0,
+      launchedAt: Date.now(),
     })
   }
 
@@ -123,6 +131,36 @@ export function SkeeBallMachine({ ballsLeft, onScore, gameOver }: SkeeBallMachin
     const updateBall = () => {
       setBall((prev) => {
         if (!prev.active || prev.landed) return prev
+
+        // Fail-safe: if ball has been active for too long, reset it and count as a miss
+        if (prev.launchedAt && Date.now() - prev.launchedAt > 6000) {
+          // mark that this launch has been handled so we don't double-score
+          launchedHandledRef.current = true
+          // short timeout to let UI reflect final state before resetting
+          setTimeout(() => {
+            setBall({
+              x: 50,
+              y: 88,
+              vx: 0,
+              vy: 0,
+              rotation: 0,
+              vr: 0,
+              active: false,
+              landed: false,
+              landedHole: null,
+              phase: "rolling",
+              z: 0,
+              vz: 0,
+              launchedAt: 0,
+            })
+            // only call onScore if this launch was the one that scheduled it
+            if (launchedHandledRef.current) {
+              onScore(0)
+              launchedHandledRef.current = false
+            }
+          }, 100)
+          return { ...prev, active: false }
+        }
 
         let newX = prev.x
         let newY = prev.y
@@ -135,10 +173,14 @@ export function SkeeBallMachine({ ballsLeft, onScore, gameOver }: SkeeBallMachin
 
         if (newPhase === "rolling") {
           newX += newVx
-          newY += newVy
           newVx *= 0.995
           newVy *= 0.995
           newVy += 0.03
+
+          // Update Y to follow ramp slope
+          const distFromCenter = Math.abs(50 - newX)
+          const slope = 48 / 50
+          newY = 48 - slope * distFromCenter
 
           if (newX < 18) {
             newX = 18
@@ -157,6 +199,8 @@ export function SkeeBallMachine({ ballsLeft, onScore, gameOver }: SkeeBallMachin
           }
 
           if (newY > 95) {
+            // prevent double scoring for this launch
+            launchedHandledRef.current = true
             setTimeout(() => {
               setBall({
                 x: 50,
@@ -171,8 +215,12 @@ export function SkeeBallMachine({ ballsLeft, onScore, gameOver }: SkeeBallMachin
                 phase: "rolling",
                 z: 0,
                 vz: 0,
+                launchedAt: 0,
               })
-              onScore(0)
+              if (launchedHandledRef.current) {
+                onScore(0)
+                launchedHandledRef.current = false
+              }
             }, 200)
             return { ...prev, active: false }
           }
@@ -269,8 +317,14 @@ export function SkeeBallMachine({ ballsLeft, onScore, gameOver }: SkeeBallMachin
               setLitHole(hole.id)
               setLastScore(hole.points)
 
+              // mark this launch handled so other detectors won't schedule a duplicate
+              launchedHandledRef.current = true
+
               setTimeout(() => {
-                onScore(hole.points)
+                if (launchedHandledRef.current) {
+                  onScore(hole.points)
+                  launchedHandledRef.current = false
+                }
                 setLitHole(null)
                 setLastScore(null)
                 setBall({
@@ -286,8 +340,9 @@ export function SkeeBallMachine({ ballsLeft, onScore, gameOver }: SkeeBallMachin
                   phase: "rolling",
                   z: 0,
                   vz: 0,
+                  launchedAt: 0,
                 })
-              }, 800)
+              }, 3000)
 
               return {
                 ...prev,
@@ -307,6 +362,8 @@ export function SkeeBallMachine({ ballsLeft, onScore, gameOver }: SkeeBallMachin
           }
 
           if (newY > RAMP_Y + 5) {
+            // mark handled and schedule a miss
+            launchedHandledRef.current = true
             setTimeout(() => {
               setBall({
                 x: 50,
@@ -321,11 +378,71 @@ export function SkeeBallMachine({ ballsLeft, onScore, gameOver }: SkeeBallMachin
                 phase: "rolling",
                 z: 0,
                 vz: 0,
+                launchedAt: 0,
               })
-              onScore(0)
+              if (launchedHandledRef.current) {
+                onScore(0)
+                launchedHandledRef.current = false
+              }
             }, 300)
             return { ...prev, active: false }
           }
+        }
+
+        // Instant hole detection at any phase when close enough vertically and horizontally
+        for (const hole of HOLES) {
+          const dx = newX - hole.x
+          const dy = newY - hole.y
+          const dist = Math.sqrt(dx * dx + dy * dy)
+
+          // Only allow scoring when the ball is downward-moving (falling) and close enough to the hole
+          if ((newPhase === "falling" || (newPhase === "bouncing" && newVy > 0)) && dist < hole.radius * 0.85 && newVy > 0) {
+            setLitHole(hole.id)
+            setLastScore(hole.points)
+
+            // mark handled so other checks won't also schedule a score
+            launchedHandledRef.current = true
+
+            setTimeout(() => {
+              if (launchedHandledRef.current) {
+                onScore(hole.points)
+                launchedHandledRef.current = false
+              }
+              setLitHole(null)
+              setLastScore(null)
+              setBall({
+                x: 50,
+                y: 88,
+                vx: 0,
+                vy: 0,
+                rotation: 0,
+                vr: 0,
+                active: false,
+                landed: false,
+                landedHole: null,
+                phase: "rolling",
+                z: 0,
+                vz: 0,
+                launchedAt: 0,
+              })
+            }, 400)
+
+            return {
+              ...prev,
+              x: hole.x,
+              y: hole.y,
+              vx: 0,
+              vy: 0,
+              vr: 0,
+              z: 0,
+              vz: 0,
+              active: true,
+              landed: true,
+              landedHole: hole.id,
+              phase: "falling",
+            }
+
+        }
         }
 
         return {
@@ -362,6 +479,7 @@ export function SkeeBallMachine({ ballsLeft, onScore, gameOver }: SkeeBallMachin
           {/* Top decorative arch */}
           <div className="absolute -top-1 left-1/2 -translate-x-1/2 w-[80%] h-8 bg-gradient-to-b from-[#8b6914] to-[#6b5010] rounded-t-full" />
 
+          {/* SKEE BALL text */}
           {/* Light bulbs row */}
           <div className="relative flex justify-center gap-3 mt-4 mb-2 px-4">
             {[...Array(9)].map((_, i) => (
@@ -373,7 +491,6 @@ export function SkeeBallMachine({ ballsLeft, onScore, gameOver }: SkeeBallMachin
             ))}
           </div>
 
-          {/* SKEE BALL text */}
           <div className="relative text-center">
             <h2
               className="text-2xl md:text-3xl tracking-wider text-[#ffd700]"
