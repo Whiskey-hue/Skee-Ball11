@@ -8,6 +8,36 @@ interface SkeeBallMachineProps {
   gameOver: boolean
 }
 
+// Audio hook for sound effects
+function useAudio() {
+  const bgMusicRef = useRef<HTMLAudioElement | null>(null)
+  const rollingSoundRef = useRef<HTMLAudioElement | null>(null)
+  const landingSoundRef = useRef<HTMLAudioElement | null>(null)
+  
+  useEffect(() => {
+    // Background music disabled
+    return () => {
+      bgMusicRef.current?.pause()
+      rollingSoundRef.current?.pause()
+      landingSoundRef.current?.pause()
+    }
+  }, [])
+  
+  const playRollingSound = () => {
+    // Rolling sound disabled
+  }
+  
+  const playLandingSound = () => {
+    // Landing sound disabled
+  }
+  
+  const stopRollingSound = () => {
+    // Rolling sound disabled
+  }
+  
+  return { playRollingSound, playLandingSound, stopRollingSound }
+}
+
 interface BallState {
   x: number
   y: number
@@ -70,6 +100,9 @@ export function SkeeBallMachine({ ballsLeft, onScore, gameOver }: SkeeBallMachin
   const animationRef = useRef<number | null>(null)
   // guard to ensure each launch only triggers one scoring event
   const launchedHandledRef = useRef(false)
+  
+  // Audio hooks
+  const { playRollingSound, playLandingSound, stopRollingSound } = useAudio()
 
   const handleStart = (clientX: number, clientY: number) => {
     if (gameOver || ballsLeft === 0 || ball.active) return
@@ -107,6 +140,9 @@ export function SkeeBallMachine({ ballsLeft, onScore, gameOver }: SkeeBallMachin
 
     // reset per-launch guard
     launchedHandledRef.current = false
+    
+    // Play rolling sound when ball is launched
+    playRollingSound()
 
     setBall({
       x: 50,
@@ -133,9 +169,10 @@ export function SkeeBallMachine({ ballsLeft, onScore, gameOver }: SkeeBallMachin
         if (!prev.active || prev.landed) return prev
 
         // Fail-safe: if ball has been active for too long, reset it and count as a miss
-        if (prev.launchedAt && Date.now() - prev.launchedAt > 6000) {
+        if (prev.launchedAt && Date.now() - prev.launchedAt > 2000) {
           // mark that this launch has been handled so we don't double-score
           launchedHandledRef.current = true
+          stopRollingSound()
           // short timeout to let UI reflect final state before resetting
           setTimeout(() => {
             setBall({
@@ -158,7 +195,7 @@ export function SkeeBallMachine({ ballsLeft, onScore, gameOver }: SkeeBallMachin
               onScore(0)
               launchedHandledRef.current = false
             }
-          }, 100)
+          }, 50)
           return { ...prev, active: false }
         }
 
@@ -201,6 +238,7 @@ export function SkeeBallMachine({ ballsLeft, onScore, gameOver }: SkeeBallMachin
           if (newY > 95) {
             // prevent double scoring for this launch
             launchedHandledRef.current = true
+            stopRollingSound()
             setTimeout(() => {
               setBall({
                 x: 50,
@@ -221,7 +259,7 @@ export function SkeeBallMachine({ ballsLeft, onScore, gameOver }: SkeeBallMachin
                 onScore(0)
                 launchedHandledRef.current = false
               }
-            }, 200)
+            }, 60)
             return { ...prev, active: false }
           }
         }
@@ -316,6 +354,10 @@ export function SkeeBallMachine({ ballsLeft, onScore, gameOver }: SkeeBallMachin
             if (dist < hole.radius) {
               setLitHole(hole.id)
               setLastScore(hole.points)
+              
+              // Play landing sound
+              stopRollingSound()
+              playLandingSound()
 
               // mark this launch handled so other detectors won't schedule a duplicate
               launchedHandledRef.current = true
@@ -342,7 +384,7 @@ export function SkeeBallMachine({ ballsLeft, onScore, gameOver }: SkeeBallMachin
                   vz: 0,
                   launchedAt: 0,
                 })
-              }, 3000)
+              }, 60)
 
               return {
                 ...prev,
@@ -364,6 +406,7 @@ export function SkeeBallMachine({ ballsLeft, onScore, gameOver }: SkeeBallMachin
           if (newY > RAMP_Y + 5) {
             // mark handled and schedule a miss
             launchedHandledRef.current = true
+            stopRollingSound()
             setTimeout(() => {
               setBall({
                 x: 50,
@@ -384,7 +427,7 @@ export function SkeeBallMachine({ ballsLeft, onScore, gameOver }: SkeeBallMachin
                 onScore(0)
                 launchedHandledRef.current = false
               }
-            }, 300)
+            }, 70)
             return { ...prev, active: false }
           }
         }
@@ -425,7 +468,7 @@ export function SkeeBallMachine({ ballsLeft, onScore, gameOver }: SkeeBallMachin
                 vz: 0,
                 launchedAt: 0,
               })
-            }, 400)
+            }, 80)
 
             return {
               ...prev,
@@ -722,7 +765,7 @@ export function SkeeBallMachine({ ballsLeft, onScore, gameOver }: SkeeBallMachin
               </div>
               <div
                 className="absolute bottom-16 left-1/2 text-[#ffd700] text-2xl"
-                style={{ transform: `translateX(-50%) rotate(${-throwAngle}deg)` }}
+                style={{ transform: `translateX(-50%) rotate(${throwAngle}deg)` }}
               >
                 ↑
               </div>

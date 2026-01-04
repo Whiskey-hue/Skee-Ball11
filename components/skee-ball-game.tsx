@@ -35,6 +35,8 @@ export default function SkeeBallGame({ autoStart = false }: { autoStart?: boolea
   const [showRewardModal, setShowRewardModal] = useState(false)
   const [unlockedRewards, setUnlockedRewards] = useState<Reward[]>([])
   const [showRewardsPanel, setShowRewardsPanel] = useState(false)
+  const [finalScore, setFinalScore] = useState<number | null>(null)
+  const [remainingPoints, setRemainingPoints] = useState<number>(0)
 
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([
     { rank: 1, name: "LEGEND", score: 250 },
@@ -74,17 +76,23 @@ export default function SkeeBallGame({ autoStart = false }: { autoStart?: boolea
       const newBalls = prev - 1
       if (newBalls === 0) {
         setTimeout(() => {
-          const finalScore = scoreRef.current + points
-          updateLeaderboard(finalScore)
-          // Check for unlocked rewards
-          const unlocked = rewards.filter(reward => !reward.claimed && finalScore >= reward.points)
+          const fs = scoreRef.current + points
+          setFinalScore(fs)
+          const unlocked = rewards.filter(reward => !reward.claimed && fs >= reward.points)
           if (unlocked.length > 0) {
             setUnlockedRewards(unlocked)
+            setRemainingPoints(fs)
             setShowRewardModal(true)
           } else {
-            setGameOver(true)
+            // No rewards unlocked: finalize, reset score/balls, return to start
+            updateLeaderboard(fs)
+            setScore(0)
+            setBallsLeft(5)
+            setRemainingPoints(0)
+            setGameOver(false)
+            setGameStarted(false)
           }
-        }, 3500) // Wait for ball reset
+        }, 200) // Wait for ball reset
       }
       return newBalls
     })
@@ -93,22 +101,62 @@ export default function SkeeBallGame({ autoStart = false }: { autoStart?: boolea
 
 
   const claimReward = (reward: Reward) => {
+    const fs = finalScore ?? scoreRef.current
+    if (fs < reward.points) return
     setRewards((prev) => prev.map((r) => (r.id === reward.id ? { ...r, claimed: true } : r)))
+    updateLeaderboard(fs)
+    setFinalScore(fs)
     setShowRewardModal(false)
     setUnlockedRewards([])
-    setGameOver(true)
+    setGameOver(false)
+    setGameStarted(false)
+    setScore(0)
+    setBallsLeft(5)
+    setRemainingPoints(0)
+  }
+
+  const continueAfterReward = () => {
+    // Preserve score and name, reset balls to play on
+    setShowRewardModal(false)
+    setUnlockedRewards([])
+    setBallsLeft(5)
+    setGameOver(false)
+    setRemainingPoints(0)
+  }
+
+  const redeemReward = (reward: Reward) => {
+    const affordable = remainingPoints >= reward.points
+    const alreadyClaimed = rewards.find((r) => r.id === reward.id)?.claimed
+    if (!affordable || alreadyClaimed) return
+    setRewards((prev) => prev.map((r) => (r.id === reward.id ? { ...r, claimed: true } : r)))
+    setRemainingPoints((p) => p - reward.points)
+  }
+
+  const finishClaiming = () => {
+    const fs = finalScore ?? scoreRef.current
+    updateLeaderboard(fs)
+    setFinalScore(fs)
+    setShowRewardModal(false)
+    setUnlockedRewards([])
+    setGameOver(false)
+    setGameStarted(false)
+    setScore(0)
+    setBallsLeft(5)
+    setRemainingPoints(0)
   }
 
   const updateLeaderboard = (finalScore: number) => {
     const name = playerName.trim() || "PLAYER"
     const newEntry: LeaderboardEntry = { rank: 0, name, score: finalScore }
 
-    const updatedBoard = [...leaderboard, newEntry]
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 5)
-      .map((entry, index) => ({ ...entry, rank: index + 1 }))
-
-    setLeaderboard(updatedBoard)
+    setLeaderboard((prev) => {
+      // Keep the newest score for this player, then rank and cap at top 5
+      const withoutPlayer = prev.filter((entry) => entry.name !== name)
+      return [...withoutPlayer, newEntry]
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 5)
+        .map((entry, index) => ({ ...entry, rank: index + 1 }))
+    })
   }
 
   const resetGame = () => {
@@ -116,6 +164,8 @@ export default function SkeeBallGame({ autoStart = false }: { autoStart?: boolea
     setBallsLeft(5)
     setGameOver(false)
     setGameStarted(false) // Reset gameStarted to false to show start screen
+    setRemainingPoints(0)
+    setFinalScore(null)
   }
 
   const startGame = () => {
@@ -187,17 +237,55 @@ export default function SkeeBallGame({ autoStart = false }: { autoStart?: boolea
             <p className="text-xl text-[#d4a574] mb-6" style={{ fontFamily: "var(--font-pixel)" }}>
               Choose your reward!
             </p>
+            <div className="mb-4">
+              <p className="text-lg text-[#ffd700]" style={{ fontFamily: "var(--font-pixel)" }}>
+                Points Available: {remainingPoints}
+              </p>
+            </div>
             <div className="space-y-4 mb-6">
-              {unlockedRewards.map((reward) => (
-                <button
-                  key={reward.id}
-                  onClick={() => claimReward(reward)}
-                  className="w-full px-4 py-3 bg-gradient-to-b from-[#ff6b35] to-[#d4532a] border-2 border-[#ffd700] rounded-lg text-[#ffd700] text-lg hover:brightness-110 transition-all"
-                  style={{ fontFamily: "var(--font-pixel)" }}
-                >
-                  {reward.name}
-                </button>
-              ))}
+              {unlockedRewards.map((reward) => {
+                const affordable = remainingPoints >= reward.points
+                const claimed = rewards.find((r) => r.id === reward.id)?.claimed
+                return (
+                  <div key={reward.id} className="flex gap-3 items-center">
+                    <button
+                      onClick={() => redeemReward(reward)}
+                      disabled={!affordable || claimed}
+                      className={`flex-1 px-4 py-3 border-2 rounded-lg text-lg transition-all ${
+                        claimed
+                          ? "bg-[#1a1a1a] border-[#444] text-[#777] cursor-not-allowed"
+                          : affordable
+                              ? "bg-gradient-to-b from-[#ff6b35] to-[#d4532a] border-[#ffd700] text-[#ffd700] hover:brightness-110"
+                              : "bg-[#333] border-[#555] text-[#888] cursor-not-allowed"
+                      }`}
+                      style={{ fontFamily: "var(--font-pixel)" }}
+                    >
+                      {reward.name} — {reward.points} pts
+                    </button>
+                    {claimed && (
+                      <span className="text-[#4a5a6a]" style={{ fontFamily: "var(--font-pixel)" }}>
+                        CLAIMED
+                      </span>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+            <div className="flex gap-3">
+              <button
+                onClick={continueAfterReward}
+                className="flex-1 px-4 py-3 border-2 border-[#ffd700] rounded-lg text-[#ffd700] text-lg bg-[#1a2744] hover:brightness-110 transition-all"
+                style={{ fontFamily: "var(--font-pixel)" }}
+              >
+                CONTINUE
+              </button>
+              <button
+                onClick={finishClaiming}
+                className="flex-1 px-4 py-3 bg-gradient-to-b from-[#ff6b35] to-[#d4532a] border-2 border-[#ffd700] rounded-lg text-[#ffd700] text-lg hover:brightness-110 transition-all"
+                style={{ fontFamily: "var(--font-pixel)" }}
+              >
+                CLAIM & FINISH
+              </button>
             </div>
           </div>
         </div>
@@ -266,7 +354,7 @@ export default function SkeeBallGame({ autoStart = false }: { autoStart?: boolea
               GAME OVER!
             </h2>
             <p className="text-xl text-[#d4a574] mb-6" style={{ fontFamily: "var(--font-pixel)" }}>
-              Final Score: {score}
+              Final Score: {finalScore ?? score}
             </p>
             <button
               onClick={resetGame}
